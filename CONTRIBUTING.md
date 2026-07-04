@@ -38,7 +38,7 @@ Follow the coding style below to make Triton Ascend easy to develop, maintain, a
 
 - Coding Guide
 
-  Use the unified coding style of the Triton Ascend community. The recommended coding style for Python is [PEP 8 Coding Style](https://pep8.org/), and that for C++ is [LLVM Coding Standards](https://llvm.org/docs/CodingStandards.html). You can use [clang-tidy](https://github.com/llvm/llvm-project/blob/main/.clang-tidy), [CppLint](https://github.com/cpplint/cpplint), [CppCheck](http://cppcheck.sourceforge.net/), [CMakeLint](https://github.com/cmake-lint/cmake-lint), [CodeSpell](https://github.com/codespell-project/codespell), [ShellCheck](https://github.com/koalaman/shellcheck), and [pylint](https://pylint.org/) to check the code format. You are advised to install these plug-ins in your IDE.
+  Use the unified coding style of the Triton Ascend community. The recommended coding style for Python is [PEP 8 Coding Style](https://pep8.org/), and that for C++ is [LLVM Coding Standards](https://llvm.org/docs/CodingStandards.html). You can use [clang-tidy](https://github.com/llvm/llvm-project/blob/main/.clang-tidy), [CppLint](https://github.com/cpplint/cpplint), [CppCheck](http://cppcheck.sourceforge.net/), [CMakeLint](https://github.com/cmake-lint/cmake-lint), [CodeSpell](https://github.com/codespell-project/codespell), [ShellCheck](https://github.com/koalaman/shellcheck), and [pylint](https://pylint.org/) to check the code format. You are advised to install these plugins in your IDE.
 
 - Unit Test Guide
 
@@ -96,7 +96,7 @@ git push origin {your_new_branch_name}
 
 6.Create a pull request to the Triton Ascend main repository.
 
-After pushing code to your remote repository, create a pull request between your new branch and the Triton Ascend main branch. After the merge request is created, Jenkins CI will be automatically set to build your pipeline test. You are advised to merge your pull request to the upstream main branch as soon as possible to reduce the merge risk.
+After pushing code to your remote repository, create a pull request between your new branch and the Triton Ascend main branch. After the pull request is created, Jenkins CI will be automatically set to build your pipeline test. You are advised to merge your pull request to the upstream main branch as soon as possible to reduce the merge risk.
 
 <h2 id="troubleshooting-gated-commit.md">Troubleshooting Gated Commit</h2>
 
