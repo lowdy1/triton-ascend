@@ -19,14 +19,14 @@ Speakers: Jianhui Li (Intel), Keren Zhou (George Mason Univ)
 * Q> Looked at code examples. Two flavors of tensor descriptor. We'd prefer keeping one: **CreateTensorDescriptorFromHost** Why are there two flavors?  Why not just keep the device side one?
 * A> You want to know why we have one device side and one host side.
 * Q> Ok to have tensor descriptors in global memory. We want tensor descriptors to reside on the device.
-* A> We have descriptor API on device because when you update the descriptor from the kernel and not from the host.
+* A> We have descriptor API on device because when you update the descriptor from the kernel and not from the device.
 * Q> Performance. Would like to limit choices to programmer. Don't need to enable other programming models. Makes it easier to support triton on other platforms.
 * A> Is it a problem if you only support device side descriptor and update?
 * Q> No.
 * A> Probably still need to keep 2 APIs.
 * Q> What do other vendors think?
 * A> Try the tutorial 0.9. Exercises differ tensor descriptor APIs demonstrating different performance characteristics.
-* Q> OpenAI support both APIs? on the device and the off-device?
+* Q> OpenAI support both APIs? on the device and the off-site?
 * A> Yes
 * Q> Removing support for block pointers
 * A> Yes, I'm proposing removing block pointers from triton. Tensor descriptor support all use-cases covered by block pointers.
