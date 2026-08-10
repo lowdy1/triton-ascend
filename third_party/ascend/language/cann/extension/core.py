@@ -24,7 +24,7 @@ __all__ = [
     "ascend_address_space", "builtin", "CORE", "copy_from_ub_to_l1", "copy", "debug_barrier", "fixpipe",
     "FixpipeDMAMode", "FixpipeDualDstMode", "FixpipePreQuantMode", "FixpipePreReluMode", "int64", "is_builtin", "MODE",
     "PIPE", "SYNC_HINT", "EVENT_ID", "IteratorType", "sub_vec_id", "sub_vec_num", "sync_block_all", "sync_block_set",
-    "sync_block_wait", "SYNC_IN_VF", "conv1d", "dot"
+    "sync_block_wait", "SYNC_IN_VF", "conv1d", "dot", "conv2d"
 ]
 
 import enum
@@ -675,3 +675,118 @@ def dot(a: tl.tensor, b: tl.tensor, format_a="", format_b="", format_c="", _sema
     output_shape = [n // 16, m // 16, 16, 16] if fractal_c else [m, n]
 
     return semantic.dot(a, b, fractal_a, fractal_b, fractal_c, output_shape, _semantic=_semantic)
+
+
+@builtin
+def conv2d(input: tl.tensor, weight: tl.tensor, bias: tl.tensor = None, stride=None, padding=None, dilation=None,
+           groups=None, _semantic=None) -> tl.tensor:
+    """
+    Applies a 2D convolution over an input signal.
+
+    :param input: Input tensor of shape (N, C_in, H, W) or (C_in, H, W).
+    :type input: tensor
+    :param weight: Weight tensor of shape (C_out, C_in // groups, kH, kW).
+    :type weight: tensor
+    :param bias: Bias tensor of shape (C_out) or None. Default: None.
+    :type bias: tensor or None
+    :param stride: The stride of the convolution kernel. Can be an int or a 2-element tuple.
+    :type stride: int or Tuple[int, int]
+    :param padding: Padding added to all sides of the input. Can be an int, a 2-element tuple, or a string.
+        ``padding='valid'`` is the same as no padding.
+        ``padding='same'`` pads the input so the output has the same shape as the input. However, this mode doesn't support any stride values other than 1.
+    :type padding: int, Tuple[int, int], or str
+    :param dilation: The spacing between kernel elements. Can be an int or a 2-element tuple.
+    :type dilation: int or Tuple[int, int]
+    :param groups: Number of blocked connections from input to output channels.
+    :type groups: int
+
+    **Example:**
+
+    .. code-block:: python
+
+        @triton.jit
+        def conv2d_kernel(input_ptr, weight_ptr, output_ptr, C, H, W, C_out, kH, kW):
+            input_tile = tl.load(input_ptr + ...)     # shape (C, H, W)
+            weight_tile = tl.load(weight_ptr + ...)   # shape (C_out, C, kH, kW)
+            output = al.conv2d(input_tile, weight_tile,
+                               stride=(1, 1), padding=(0, 0), dilation=(1, 1))
+            tl.store(output_ptr + ..., output)
+
+    :return: The output tensor of shape (N, C_out, H_out, W_out).
+    :rtype: tensor
+    """
+
+    stride = _unwrap_if_constexpr(stride)
+    padding = _unwrap_if_constexpr(padding)
+    dilation = _unwrap_if_constexpr(dilation)
+    groups = _unwrap_if_constexpr(groups)
+
+    # Set default values
+    stride = stride if stride is not None else 1
+    padding = padding if padding is not None else 0
+    dilation = dilation if dilation is not None else 1
+    groups = groups if groups is not None else 1
+
+    if type(bias).__name__ == 'constexpr':
+        bias = getattr(bias, 'value', bias)
+    if bias is not None:
+        assert len(bias.shape) == 1, f"bias must be a 1D tensor (C_out), got {len(bias.shape)}D"
+    assert isinstance(groups, int), f"groups must be an integer, got {groups}"
+
+    def _check_and_normalize_2d_param(param, name):
+        if param is None:
+            return None
+        if isinstance(param, (list, tuple, tl.tuple)):
+            assert len(param) == 2, f"{name} must be an integer or a 2-element tuple, got {param}"
+            return list(param)
+        assert isinstance(param, int), f"{name} must be an integer or a 2-element tuple, got {type(param)}"
+        return [param, param]
+
+    stride = _check_and_normalize_2d_param(stride, 'stride')
+    dilation = _check_and_normalize_2d_param(dilation, 'dilation')
+
+    is_batched = len(input.shape) == 4
+    H_in = input.shape[-2]
+    W_in = input.shape[-1]
+    kH = weight.shape[2]
+    kW = weight.shape[3]
+
+    if isinstance(padding, str):
+        assert padding in ['same', 'valid'], f"padding string must be 'same' or 'valid', got '{padding}'"
+    else:
+        padding = _check_and_normalize_2d_param(padding, 'padding')
+    if isinstance(padding, str):
+        if padding == 'valid':
+            padding_int = [0, 0]
+        elif padding == 'same':
+            if stride != [1, 1]:
+                raise ValueError("padding='same' is only supported when stride=1")
+            pad_h = ((H_in - 1) * stride[0] + dilation[0] * (kH - 1) + 1 - H_in) // 2
+            pad_w = ((W_in - 1) * stride[1] + dilation[1] * (kW - 1) + 1 - W_in) // 2
+            padding_int = [pad_h, pad_w]
+    else:
+        padding_int = padding if padding is not None else [0, 0]
+
+    assert len(input.shape) in [3, 4], f"input must be 3D (C,H,W) or 4D (N,C,H,W), got {len(input.shape)}D"
+    assert len(weight.shape) == 4, f"weight must be 4D (C_out, C_in/groups, kH, kW), got {len(weight.shape)}D"
+
+    C_in = input.shape[-3] if is_batched else input.shape[0]
+    C_out = weight.shape[0]
+
+    H_in_val = _unwrap_if_constexpr(input.shape[-2])
+    W_in_val = _unwrap_if_constexpr(input.shape[-1])
+    kH_val = _unwrap_if_constexpr(weight.shape[2])
+    kW_val = _unwrap_if_constexpr(weight.shape[3])
+
+    def _compute_output(in_size, pad, dil, k, strd):
+        return -int(-((in_size + 2 * pad - dil * (k - 1) - 1) / strd + 1))
+
+    H_out_val = _compute_output(H_in_val, padding_int[0], dilation[0], kH_val, stride[0])
+    W_out_val = _compute_output(W_in_val, padding_int[1], dilation[1], kW_val, stride[1])
+
+    if is_batched:
+        output_shape = [input.shape[0], C_out, H_out_val, W_out_val]
+    else:
+        output_shape = [C_out, H_out_val, W_out_val]
+
+    return semantic.conv2d(input, weight, bias, stride, padding_int, dilation, groups, output_shape, _semantic)

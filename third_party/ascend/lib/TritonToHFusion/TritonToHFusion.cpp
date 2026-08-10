@@ -206,6 +206,93 @@ struct TritonConv1dToHFusionConversion
     return success();
   }
 };
+
+struct TritonConv2dToHFusionConversion
+    : OpRewritePattern<triton::ascend::Conv2dOp> {
+  using OpRewritePattern<triton::ascend::Conv2dOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::ascend::Conv2dOp op,
+                                PatternRewriter &rewriter) const final {
+    auto loc = op.getLoc();
+
+    Value input = op.getInput();
+    Value weight = op.getWeight();
+    Value biasValue = op.getBias();
+    auto stride = op.getStride();
+    auto padding = op.getPadding();
+    auto dilation = op.getDilation();
+    int64_t groups = op.getGroups();
+
+    auto inputType = mlir::cast<RankedTensorType>(input.getType());
+    auto weightType = mlir::cast<RankedTensorType>(weight.getType());
+    if (!inputType.hasStaticShape() || !weightType.hasStaticShape()) {
+      return failure();
+    }
+
+    ArrayRef<int64_t> inputShape = inputType.getShape();
+    ArrayRef<int64_t> weightShape = weightType.getShape();
+
+    bool isBatched = inputShape.size() == 4;
+    int64_t N;
+    if (isBatched) N = inputShape[0];
+    int64_t H_in = inputShape[isBatched ? 2 : 1];
+    int64_t W_in = inputShape[isBatched ? 3 : 2];
+    int64_t C_out = weightShape[0];
+    int64_t kH = weightShape[2];
+    int64_t kW = weightShape[3];
+
+    auto computeOutDim = [](int64_t in_size, int64_t pad, int64_t dil,
+                             int64_t k, int64_t str) -> int64_t {
+      return (in_size + 2 * pad - dil * (k - 1) - 1) / str + 1;
+    };
+
+    int64_t H_out = computeOutDim(H_in, static_cast<int64_t>(padding[0]),
+                                   static_cast<int64_t>(dilation[0]), kH,
+                                   static_cast<int64_t>(stride[0]));
+    int64_t W_out = computeOutDim(W_in, static_cast<int64_t>(padding[1]),
+                                   static_cast<int64_t>(dilation[1]), kW,
+                                   static_cast<int64_t>(stride[1]));
+
+    auto resultType = mlir::cast<RankedTensorType>(op.getResult().getType());
+    Type resultElementType = resultType.getElementType();
+
+    constexpr int64_t dim3 = 3;
+    constexpr int64_t dim4 = 4;
+    Value initTensor;
+    if (isBatched) {
+      SmallVector<int64_t, dim4> outputShape{N, C_out, H_out, W_out};
+      initTensor =
+          rewriter.create<tensor::EmptyOp>(loc, outputShape, resultElementType);
+    } else {
+      SmallVector<int64_t, dim3> outputShape{C_out, H_out, W_out};
+      initTensor =
+          rewriter.create<tensor::EmptyOp>(loc, outputShape, resultElementType);
+    }
+
+    SmallVector<Value, dim3> ins;
+    ins.push_back(input);
+    ins.push_back(weight);
+    if (biasValue) {
+      ins.push_back(biasValue);
+    }
+
+    // Convert DenseI32ArrayAttr (TritonAscend) to DenseI64ArrayAttr (HFusion)
+    auto strideAttr = rewriter.getDenseI64ArrayAttr(
+        {static_cast<int64_t>(stride[0]), static_cast<int64_t>(stride[1])});
+    auto paddingAttr = rewriter.getDenseI64ArrayAttr(
+        {static_cast<int64_t>(padding[0]), static_cast<int64_t>(padding[1])});
+    auto dilationAttr = rewriter.getDenseI64ArrayAttr(
+        {static_cast<int64_t>(dilation[0]), static_cast<int64_t>(dilation[1])});
+
+    auto newOp = rewriter.create<hfusion::Conv2DOp>(
+        loc, ins, initTensor, strideAttr, paddingAttr, dilationAttr,
+        static_cast<int32_t>(groups));
+
+    rewriter.replaceOp(op, newOp.getResult());
+
+    return success();
+  }
+};
 } // namespace
 
 namespace {
@@ -232,6 +319,7 @@ void TritonToHFusionPass::runOnOperation() {
   patterns.add<TritonFpToFpToHFusionConversion>(patterns.getContext());
   patterns.add<TritonModToHFusionConversion>(patterns.getContext());
   patterns.add<TritonConv1dToHFusionConversion>(patterns.getContext());
+  patterns.add<TritonConv2dToHFusionConversion>(patterns.getContext());
 
   // Apply patterns with greedy rewriting
   // This allows patterns to return failure() without causing pass failure

@@ -588,4 +588,36 @@ def DotOp : TT_Ascend_Op<"dot", [
     let hasVerifier = 1;
 }
 
+//
+// Conv Op
+//
+def Conv2dOp : TT_Ascend_Op<"conv2d", [
+    Pure,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>
+]> {
+    let summary = "2D convolution operation";
+    let description = [{
+        Performs a 2D convolution operation on the input tensor.
+    }];
+
+    let arguments = (ins
+        TT_Tensor:$input,
+        TT_Tensor:$weight,
+        Optional<TT_Tensor>:$bias,
+        DenseI32ArrayAttr:$stride,
+        DenseI32ArrayAttr:$padding,
+        DenseI32ArrayAttr:$dilation,
+        I64Attr:$groups
+    );
+
+    let results = (outs TT_Tensor:$result);
+
+    let assemblyFormat = [{
+        `(` operands `)`
+        attr-dict `:` functional-type(operands, $result)
+    }];
+
+    let hasVerifier = 1;
+}
+
 #endif // TRITON_ASCEND_OPS
