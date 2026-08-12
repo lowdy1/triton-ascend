@@ -339,8 +339,10 @@ LogicalResult Conv2dOp::verify() {
   if (getStride().size() != 2) {
     return emitOpError("stride must be a 2-element array [stride_h, stride_w]");
   }
-  if (getPadding().size() != 2) {
-    return emitOpError("padding must be a 2-element array [pad_h, pad_w]");
+  if (getPadding().size() != 4) {
+    return emitOpError(
+        "padding must be a 4-element array [pad_top, pad_bottom, pad_left, "
+        "pad_right]");
   }
   if (getDilation().size() != 2) {
     return emitOpError("dilation must be a 2-element array [dil_h, dil_w]");
@@ -394,20 +396,26 @@ LogicalResult Conv2dOp::inferReturnTypes(
   auto padding = adaptor.getPadding();
   auto dilation = adaptor.getDilation();
 
-  auto computeOutDim = [](int64_t in_size, int64_t pad, int64_t dil,
-                           int64_t k, int64_t str) -> int64_t {
-    double val = static_cast<double>(in_size + 2 * pad - dil * (k - 1) - 1) /
+  auto computeOutDim = [](int64_t in_size, int64_t pad_before, int64_t pad_after,
+                           int64_t dil, int64_t k, int64_t str) -> int64_t {
+    double val = static_cast<double>(in_size + pad_before + pad_after -
+                                     dil * (k - 1) - 1) /
                      str +
                  1;
     return static_cast<int64_t>(std::floor(val));
   };
 
-  int64_t H_out = computeOutDim(H_in, static_cast<int64_t>(padding[0]),
-                                static_cast<int64_t>(dilation[0]), kH,
-                                static_cast<int64_t>(stride[0]));
-  int64_t W_out = computeOutDim(W_in, static_cast<int64_t>(padding[1]),
-                                static_cast<int64_t>(dilation[1]), kW,
-                                static_cast<int64_t>(stride[1]));
+  // padding = [pad_top, pad_bottom, pad_left, pad_right]
+  int64_t H_out =
+      computeOutDim(H_in, static_cast<int64_t>(padding[0]),
+                    static_cast<int64_t>(padding[1]),
+                    static_cast<int64_t>(dilation[0]), kH,
+                    static_cast<int64_t>(stride[0]));
+  int64_t W_out =
+      computeOutDim(W_in, static_cast<int64_t>(padding[2]),
+                    static_cast<int64_t>(padding[3]),
+                    static_cast<int64_t>(dilation[1]), kW,
+                    static_cast<int64_t>(stride[1]));
 
   SmallVector<int64_t, 4> outputShape;
   if (isBatched) {

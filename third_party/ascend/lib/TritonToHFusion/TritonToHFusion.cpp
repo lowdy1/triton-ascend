@@ -241,17 +241,20 @@ struct TritonConv2dToHFusionConversion
     int64_t kH = weightShape[2];
     int64_t kW = weightShape[3];
 
-    auto computeOutDim = [](int64_t in_size, int64_t pad, int64_t dil,
-                             int64_t k, int64_t str) -> int64_t {
-      return (in_size + 2 * pad - dil * (k - 1) - 1) / str + 1;
+    auto computeOutDim = [](int64_t in_size, int64_t pad_before, int64_t pad_after,
+                             int64_t dil, int64_t k, int64_t str) -> int64_t {
+      return (in_size + pad_before + pad_after - dil * (k - 1) - 1) / str + 1;
     };
 
+    // padding = [pad_top, pad_bottom, pad_left, pad_right]
     int64_t H_out = computeOutDim(H_in, static_cast<int64_t>(padding[0]),
-                                   static_cast<int64_t>(dilation[0]), kH,
-                                   static_cast<int64_t>(stride[0]));
-    int64_t W_out = computeOutDim(W_in, static_cast<int64_t>(padding[1]),
-                                   static_cast<int64_t>(dilation[1]), kW,
-                                   static_cast<int64_t>(stride[1]));
+                                  static_cast<int64_t>(padding[1]),
+                                  static_cast<int64_t>(dilation[0]), kH,
+                                  static_cast<int64_t>(stride[0]));
+    int64_t W_out = computeOutDim(W_in, static_cast<int64_t>(padding[2]),
+                                  static_cast<int64_t>(padding[3]),
+                                  static_cast<int64_t>(dilation[1]), kW,
+                                  static_cast<int64_t>(stride[1]));
 
     auto resultType = mlir::cast<RankedTensorType>(op.getResult().getType());
     Type resultElementType = resultType.getElementType();
@@ -280,7 +283,7 @@ struct TritonConv2dToHFusionConversion
     auto strideAttr = rewriter.getDenseI64ArrayAttr(
         {static_cast<int64_t>(stride[0]), static_cast<int64_t>(stride[1])});
     auto paddingAttr = rewriter.getDenseI64ArrayAttr(
-        {static_cast<int64_t>(padding[0]), static_cast<int64_t>(padding[1])});
+        {static_cast<int64_t>(padding[0]), static_cast<int64_t>(padding[2])});
     auto dilationAttr = rewriter.getDenseI64ArrayAttr(
         {static_cast<int64_t>(dilation[0]), static_cast<int64_t>(dilation[1])});
 

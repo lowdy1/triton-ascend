@@ -1656,7 +1656,12 @@ void TritonToLinalgPass::runOnOperation() {
     existDot = true;
     return WalkResult::interrupt();
   });
+  // Conv1d and conv2d run on the cube unit: tag them as mix mode.
   moduleOp.walk([&](hfusion::Conv1DOp conv1dOp) {
+    existDot = true;
+    return WalkResult::interrupt();
+  });
+  moduleOp.walk([&](hfusion::Conv2DOp conv2dOp) {
     existDot = true;
     return WalkResult::interrupt();
   });

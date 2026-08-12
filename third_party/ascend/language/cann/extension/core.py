@@ -691,10 +691,13 @@ def conv2d(input: tl.tensor, weight: tl.tensor, bias: tl.tensor = None, stride=N
     :type bias: tensor or None
     :param stride: The stride of the convolution kernel. Can be an int or a 2-element tuple.
     :type stride: int or Tuple[int, int]
-    :param padding: Padding added to all sides of the input. Can be an int, a 2-element tuple, or a string.
+    :param padding: Padding added to the input. Can be an int (symmetric on all
+        sides), a 2-element tuple (pad_h, pad_w) (symmetric per dimension),
+        a 4-element tuple (pad_top, pad_bottom, pad_left, pad_right)
+        (asymmetric), or a string.
         ``padding='valid'`` is the same as no padding.
         ``padding='same'`` pads the input so the output has the same shape as the input. However, this mode doesn't support any stride values other than 1.
-    :type padding: int, Tuple[int, int], or str
+    :type padding: int, Tuple[int, int], Tuple[int, int, int, int], or str
     :param dilation: The spacing between kernel elements. Can be an int or a 2-element tuple.
     :type dilation: int or Tuple[int, int]
     :param groups: Number of blocked connections from input to output channels.
@@ -751,21 +754,40 @@ def conv2d(input: tl.tensor, weight: tl.tensor, bias: tl.tensor = None, stride=N
     kH = weight.shape[2]
     kW = weight.shape[3]
 
+    def _check_and_normalize_padding(param):
+        """Normalize padding to [pad_top, pad_bottom, pad_left, pad_right].
+
+        Accepts an int (symmetric on all sides), a 2-element sequence
+        [pad_h, pad_w] (symmetric per dimension), or a 4-element sequence
+        [pad_top, pad_bottom, pad_left, pad_right] (fully asymmetric).
+        """
+        if param is None:
+            return [0, 0, 0, 0]
+        if isinstance(param, int):
+            return [param, param, param, param]
+        if isinstance(param, (list, tuple, tl.tuple)):
+            assert len(param) in [2, 4], \
+                f"padding must be an int, a 2-element or 4-element sequence, got {param}"
+            if len(param) == 2:
+                pad_h, pad_w = param[0], param[1]
+                return [pad_h, pad_h, pad_w, pad_w]
+            return list(param)
+        assert False, f"padding must be an int, a 2-element or 4-element sequence, got {type(param)}"
+
     if isinstance(padding, str):
         assert padding in ['same', 'valid'], f"padding string must be 'same' or 'valid', got '{padding}'"
-    else:
-        padding = _check_and_normalize_2d_param(padding, 'padding')
-    if isinstance(padding, str):
         if padding == 'valid':
-            padding_int = [0, 0]
+            padding_int = [0, 0, 0, 0]
         elif padding == 'same':
             if stride != [1, 1]:
                 raise ValueError("padding='same' is only supported when stride=1")
-            pad_h = ((H_in - 1) * stride[0] + dilation[0] * (kH - 1) + 1 - H_in) // 2
-            pad_w = ((W_in - 1) * stride[1] + dilation[1] * (kW - 1) + 1 - W_in) // 2
-            padding_int = [pad_h, pad_w]
+            # Total padding needed per dimension; extra element goes to bottom/right
+            pad_h_total = (H_in - 1) * stride[0] + dilation[0] * (kH - 1) + 1 - H_in
+            pad_w_total = (W_in - 1) * stride[1] + dilation[1] * (kW - 1) + 1 - W_in
+            padding_int = [pad_h_total // 2, pad_h_total - pad_h_total // 2,
+                           pad_w_total // 2, pad_w_total - pad_w_total // 2]
     else:
-        padding_int = padding if padding is not None else [0, 0]
+        padding_int = _check_and_normalize_padding(padding)
 
     assert len(input.shape) in [3, 4], f"input must be 3D (C,H,W) or 4D (N,C,H,W), got {len(input.shape)}D"
     assert len(weight.shape) == 4, f"weight must be 4D (C_out, C_in/groups, kH, kW), got {len(weight.shape)}D"
@@ -778,11 +800,12 @@ def conv2d(input: tl.tensor, weight: tl.tensor, bias: tl.tensor = None, stride=N
     kH_val = _unwrap_if_constexpr(weight.shape[2])
     kW_val = _unwrap_if_constexpr(weight.shape[3])
 
-    def _compute_output(in_size, pad, dil, k, strd):
-        return -int(-((in_size + 2 * pad - dil * (k - 1) - 1) / strd + 1))
+    def _compute_output(in_size, pad_before, pad_after, dil, k, strd):
+        return -int(-((in_size + pad_before + pad_after - dil * (k - 1) - 1) / strd + 1))
 
-    H_out_val = _compute_output(H_in_val, padding_int[0], dilation[0], kH_val, stride[0])
-    W_out_val = _compute_output(W_in_val, padding_int[1], dilation[1], kW_val, stride[1])
+    # padding_int = [pad_top, pad_bottom, pad_left, pad_right]
+    H_out_val = _compute_output(H_in_val, padding_int[0], padding_int[1], dilation[0], kH_val, stride[0])
+    W_out_val = _compute_output(W_in_val, padding_int[2], padding_int[3], dilation[1], kW_val, stride[1])
 
     if is_batched:
         output_shape = [input.shape[0], C_out, H_out_val, W_out_val]
