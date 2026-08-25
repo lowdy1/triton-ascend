@@ -211,8 +211,9 @@ def dot(a: tl.tensor, b: tl.tensor, fractal_a: bool, fractal_b: bool, fractal_c:
     return tl.tensor(out, output_ty)
 
 
-def conv2d(input_tensor: tl.tensor, weight_tensor: tl.tensor, bias: Union[tl.tensor, None], stride: list,
-           padding: list, dilation: list, groups: int, output_shape, _semantic=None) -> tl.tensor:
+def conv2d(input_tensor: tl.tensor, weight_tensor: tl.tensor, bias: Union[tl.tensor, None], stride: Union[int, tuple],
+           padding: Union[int, tuple], dilation: Union[int,
+                                                       tuple], groups: int, output_shape, _semantic=None) -> tl.tensor:
     bias_handle = None if bias is None else bias.handle
 
     element_ty = input_tensor.type.element_ty

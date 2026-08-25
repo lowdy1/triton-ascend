@@ -920,9 +920,8 @@ void init_ascend_ir(py::module &&m) {
       .def(
           "create_conv2d",
           [](AscendNPUIROpBuilder &self, Value input, Value weight,
-             py::object bias, std::vector<int64_t> stride,
-             std::vector<int64_t> padding, std::vector<int64_t> dilation,
-             int64_t groups, Type output_type) -> Value {
+             py::object bias, py::object stride, py::object padding,
+             py::object dilation, int64_t groups, Type output_type) -> Value {
             Value biasValue;
             if (!bias.is_none()) {
               biasValue = bias.cast<Value>();
@@ -930,16 +929,29 @@ void init_ascend_ir(py::module &&m) {
               biasValue = Value();
             }
             auto &builder = self.getBuilder();
-            auto strideAttr = builder.getDenseI32ArrayAttr(
-                {static_cast<int32_t>(stride[0]), static_cast<int32_t>(stride[1])});
-            auto paddingAttr = builder.getDenseI32ArrayAttr(
-                {static_cast<int32_t>(padding[0]), static_cast<int32_t>(padding[1])});
-            auto dilationAttr = builder.getDenseI32ArrayAttr(
-                {static_cast<int32_t>(dilation[0]), static_cast<int32_t>(dilation[1])});
+            // Keep ints as IntegerAttr and sequences as DenseI32ArrayAttr.
+            // padding = [pad_top, pad_bottom, pad_left, pad_right] or a
+            // 2-element [pad_h, pad_w].
+            auto buildConvParamAttr = [&](py::object param,
+                                          const std::string &name,
+                                          bool allowFour) -> Attribute {
+              if (py::isinstance<py::int_>(param)) {
+                return builder.getI64IntegerAttr(param.cast<int64_t>());
+              }
+              py::sequence seq = param.cast<py::sequence>();
+              size_t len = py::len(seq);
+              SmallVector<int32_t> values;
+              for (auto item : seq)
+                values.push_back(item.cast<int32_t>());
+              return builder.getDenseI32ArrayAttr(values);
+            };
+            auto strideAttr = buildConvParamAttr(stride, "stride", false);
+            auto paddingAttr = buildConvParamAttr(padding, "padding", true);
+            auto dilationAttr = buildConvParamAttr(dilation, "dilation", false);
             auto groupsAttr = builder.getI64IntegerAttr(groups);
             auto op = self.create<triton::ascend::Conv2dOp>(
-                output_type, input, weight, biasValue, strideAttr,
-                paddingAttr, dilationAttr, groupsAttr);
+                output_type, input, weight, biasValue, strideAttr, paddingAttr,
+                dilationAttr, groupsAttr);
             return op.getResult();
           },
           py::arg("input"), py::arg("weight"), py::arg("bias"),

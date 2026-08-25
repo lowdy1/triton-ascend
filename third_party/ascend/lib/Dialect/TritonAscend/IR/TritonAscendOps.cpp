@@ -13,6 +13,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -304,6 +305,23 @@ LogicalResult Conv1dOp::inferReturnTypes(
 }
 
 //-- Conv2dOp --
+
+// Parse a conv2d parameter attribute: an integer (uniform scalar) or an
+// integer array. Returns the raw values, or std::nullopt for an invalid
+// attribute.
+static std::optional<SmallVector<int64_t>>
+parseConv2dParamAttr(Attribute attr) {
+  if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+    return SmallVector<int64_t>{intAttr.getInt()};
+  if (auto arrayAttr = dyn_cast<DenseI32ArrayAttr>(attr)) {
+    SmallVector<int64_t> values;
+    for (int32_t v : arrayAttr.asArrayRef())
+      values.push_back(static_cast<int64_t>(v));
+    return values;
+  }
+  return std::nullopt;
+}
+
 LogicalResult Conv2dOp::verify() {
   auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
   auto weightType = dyn_cast<RankedTensorType>(getWeight().getType());
@@ -312,11 +330,13 @@ LogicalResult Conv2dOp::verify() {
   constexpr int64_t dim4 = 4;
   auto inputRank = inputType.getShape().size();
   if (inputRank != dim3 && inputRank != dim4) {
-    return emitOpError("input tensor must be 3D (C,H,W) or 4D (N,C,H,W), but got rank ")
+    return emitOpError(
+               "input tensor must be 3D (C,H,W) or 4D (N,C,H,W), but got rank ")
            << inputRank;
   }
   if (weightType.getShape().size() != dim4) {
-    return emitOpError("weight tensor must be 4D (C_out, C_in/groups, kH, kW), but got rank ")
+    return emitOpError("weight tensor must be 4D (C_out, C_in/groups, kH, kW), "
+                       "but got rank ")
            << weightType.getShape().size();
   }
 
@@ -336,18 +356,24 @@ LogicalResult Conv2dOp::verify() {
     }
   }
 
-  if (getStride().size() != 2) {
-    return emitOpError("stride must be a 2-element array [stride_h, stride_w]");
-  }
-  if (getPadding().size() != 4) {
+  auto stride = parseConv2dParamAttr(getStride());
+  auto padding = parseConv2dParamAttr(getPadding());
+  auto dilation = parseConv2dParamAttr(getDilation());
+  if (!stride || stride->empty() || stride->size() > 2) {
     return emitOpError(
-        "padding must be a 4-element array [pad_top, pad_bottom, pad_left, "
-        "pad_right]");
+        "stride must be an integer or a 2-element array [stride_h, stride_w]");
   }
-  if (getDilation().size() != 2) {
-    return emitOpError("dilation must be a 2-element array [dil_h, dil_w]");
+  if (!padding || padding->empty() || padding->size() > 4) {
+    return emitOpError(
+        "padding must be an integer, a 2-element array [pad_h, pad_w], or a "
+        "4-element array [pad_top, pad_bottom, pad_left, pad_right]");
   }
-  if (getStride()[0] == 0 || getStride()[1] == 0) {
+  if (!dilation || dilation->empty() || dilation->size() > 2) {
+    return emitOpError(
+        "dilation must be an integer or a 2-element array [dil_h, dil_w]");
+  }
+  // Uniform scalar or pair: front/back covers both forms.
+  if (stride->front() == 0 || stride->back() == 0) {
     return emitOpError("stride elements must be > 0");
   }
 
@@ -392,12 +418,21 @@ LogicalResult Conv2dOp::inferReturnTypes(
   int64_t kH = weightShape[2];
   int64_t kW = weightShape[3];
 
-  auto stride = adaptor.getStride();
-  auto padding = adaptor.getPadding();
-  auto dilation = adaptor.getDilation();
+  auto strideAttr = parseConv2dParamAttr(adaptor.getStride());
+  auto paddingAttr = parseConv2dParamAttr(adaptor.getPadding());
+  auto dilationAttr = parseConv2dParamAttr(adaptor.getDilation());
+  if (!strideAttr || strideAttr->empty() || strideAttr->size() > 2 ||
+      !paddingAttr || paddingAttr->empty() || paddingAttr->size() > 4 ||
+      !dilationAttr || dilationAttr->empty() || dilationAttr->size() > 2) {
+    return failure();
+  }
+  auto &stride = *strideAttr;
+  auto &padding = *paddingAttr;
+  auto &dilation = *dilationAttr;
 
-  auto computeOutDim = [](int64_t in_size, int64_t pad_before, int64_t pad_after,
-                           int64_t dil, int64_t k, int64_t str) -> int64_t {
+  auto computeOutDim = [](int64_t in_size, int64_t pad_before,
+                          int64_t pad_after, int64_t dil, int64_t k,
+                          int64_t str) -> int64_t {
     double val = static_cast<double>(in_size + pad_before + pad_after -
                                      dil * (k - 1) - 1) /
                      str +
@@ -405,17 +440,24 @@ LogicalResult Conv2dOp::inferReturnTypes(
     return static_cast<int64_t>(std::floor(val));
   };
 
-  // padding = [pad_top, pad_bottom, pad_left, pad_right]
-  int64_t H_out =
-      computeOutDim(H_in, static_cast<int64_t>(padding[0]),
-                    static_cast<int64_t>(padding[1]),
-                    static_cast<int64_t>(dilation[0]), kH,
-                    static_cast<int64_t>(stride[0]));
-  int64_t W_out =
-      computeOutDim(W_in, static_cast<int64_t>(padding[2]),
-                    static_cast<int64_t>(padding[3]),
-                    static_cast<int64_t>(dilation[1]), kW,
-                    static_cast<int64_t>(stride[1]));
+  // Expand padding to [pad_top, pad_bottom, pad_left, pad_right].
+  SmallVector<int64_t, 4> pads;
+  if (padding.size() == 1) {
+    pads.assign(4, padding[0]);
+  } else if (padding.size() == 2) {
+    pads = {padding[0], padding[0], padding[1], padding[1]};
+  } else {
+    pads.assign(padding.begin(), padding.end());
+  }
+  // Uniform scalar or pair: front/back covers both forms.
+  int64_t strideH = stride.front();
+  int64_t strideW = stride.back();
+  int64_t dilH = dilation.front();
+  int64_t dilW = dilation.back();
+
+  // pads = [pad_top, pad_bottom, pad_left, pad_right]
+  int64_t H_out = computeOutDim(H_in, pads[0], pads[1], dilH, kH, strideH);
+  int64_t W_out = computeOutDim(W_in, pads[2], pads[3], dilW, kW, strideW);
 
   SmallVector<int64_t, 4> outputShape;
   if (isBatched) {

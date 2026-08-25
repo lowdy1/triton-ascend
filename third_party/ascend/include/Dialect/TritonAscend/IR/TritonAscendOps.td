@@ -611,14 +611,16 @@ def Conv2dOp : TT_Ascend_Op<"conv2d", [
           [N, C_out, H_out, W_out] (batched).
 
         Configurable attributes:
-        - stride: 2-element integer array [stride_h, stride_w], the step of
-          the convolution kernel along H and W. Elements must be > 0.
-        - padding: 4-element integer array
-          [pad_top, pad_bottom, pad_left, pad_right], the number of
-          zero-padding elements added to each side of the input. This
-          supports asymmetric padding, e.g. pad_top != pad_bottom.
-        - dilation: 2-element integer array [dil_h, dil_w], the spacing
-          between kernel elements along H and W.
+        - stride: an integer (uniform along H and W) or 2-element integer
+          array [stride_h, stride_w], the step of the convolution kernel
+          along H and W. Elements must be > 0.
+        - padding: an integer (uniform on all sides), a 2-element integer
+          array [pad_h, pad_w] (symmetric per dimension), or a 4-element
+          integer array [pad_top, pad_bottom, pad_left, pad_right], the
+          number of zero-padding elements added to each side of the input.
+        - dilation: an integer (uniform along H and W) or 2-element integer
+          array [dil_h, dil_w], the spacing between kernel elements along H
+          and W.
         - groups: number of blocked connections from input channels to
           output channels. C_in and C_out must both be divisible by
           groups.
@@ -634,9 +636,10 @@ def Conv2dOp : TT_Ascend_Op<"conv2d", [
         TT_Tensor:$input,
         TT_Tensor:$weight,
         Optional<TT_Tensor>:$bias,
-        DenseI32ArrayAttr:$stride,
-        DenseI32ArrayAttr:$padding,
-        DenseI32ArrayAttr:$dilation,
+        // IntegerAttr (uniform scalar) or DenseI32ArrayAttr.
+        AnyAttr:$stride,
+        AnyAttr:$padding,
+        AnyAttr:$dilation,
         I64Attr:$groups
     );
 
